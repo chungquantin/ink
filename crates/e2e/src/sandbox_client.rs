@@ -230,8 +230,7 @@ where
 impl<
         AccountId: Clone + Send + Sync + From<[u8; 32]> + AsRef<[u8; 32]>,
         S: Sandbox,
-        E: Environment<AccountId = AccountId, Balance = ContractsBalanceOf<S::Runtime>>
-            + 'static,
+        E: Environment<AccountId = AccountId, Balance = U256> + 'static,
     > BuilderClient<E> for Client<AccountId, S>
 where
     S::Runtime: pallet_balances::Config + pallet_revive::Config,

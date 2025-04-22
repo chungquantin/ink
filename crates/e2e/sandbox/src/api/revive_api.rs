@@ -6,10 +6,14 @@ use crate::{
     H256,
 };
 use frame_support::{
-    pallet_prelude::DispatchError,
+    pallet_prelude::{
+        DispatchError,
+        Zero,
+    },
     sp_runtime::traits::Bounded,
     traits::{
         fungible::Inspect,
+        Get,
         Time,
     },
     weights::Weight,
@@ -22,6 +26,10 @@ use ink_primitives::{
 use pallet_revive::{
     Code,
     CodeUploadResult,
+    CodeUploadReturnValue,
+    Config,
+    ConversionPrecision,
+    Error,
 };
 use sp_core::U256;
 use std::ops::Not;
@@ -67,12 +75,12 @@ pub trait ContractAPI {
     fn deploy_contract(
         &mut self,
         contract_bytes: Vec<u8>,
-        value: BalanceOf<Self::T>,
+        value: U256,
         data: Vec<u8>,
         salt: Option<[u8; 32]>,
         origin: OriginFor<Self::T>,
         gas_limit: Weight,
-        storage_deposit_limit: DepositLimit<BalanceOf<Self::T>>,
+        storage_deposit_limit: DepositLimit<U256>,
     ) -> ContractResultInstantiate<Self::T>;
 
     /// Interface for `bare_instantiate` contract call for a previously uploaded contract.
@@ -91,12 +99,12 @@ pub trait ContractAPI {
     fn instantiate_contract(
         &mut self,
         code_hash: H256,
-        value: BalanceOf<Self::T>,
+        value: U256,
         data: Vec<u8>,
         salt: Option<[u8; 32]>,
         origin: OriginFor<Self::T>,
         gas_limit: Weight,
-        storage_deposit_limit: DepositLimit<BalanceOf<Self::T>>,
+        storage_deposit_limit: DepositLimit<U256>,
     ) -> ContractResultInstantiate<Self::T>;
 
     /// Interface for `bare_upload_code` contract call.
@@ -110,8 +118,8 @@ pub trait ContractAPI {
         &mut self,
         contract_bytes: Vec<u8>,
         origin: OriginFor<Self::T>,
-        storage_deposit_limit: BalanceOf<Self::T>,
-    ) -> CodeUploadResult<BalanceOf<Self::T>>;
+        storage_deposit_limit: U256,
+    ) -> CodeUploadResult<U256>;
 
     /// Interface for `bare_call` contract call.
     ///
@@ -127,11 +135,11 @@ pub trait ContractAPI {
     fn call_contract(
         &mut self,
         address: Address,
-        value: BalanceOf<Self::T>,
+        value: U256,
         data: Vec<u8>,
         origin: OriginFor<Self::T>,
         gas_limit: Weight,
-        storage_deposit_limit: DepositLimit<BalanceOf<Self::T>>,
+        storage_deposit_limit: DepositLimit<U256>,
     ) -> ContractExecResultFor<Self::T>;
 }
 
@@ -159,14 +167,17 @@ where
     fn deploy_contract(
         &mut self,
         contract_bytes: Vec<u8>,
-        value: BalanceOf<Self::T>,
+        value: U256,
         data: Vec<u8>,
         salt: Option<[u8; 32]>,
         origin: OriginFor<Self::T>,
         gas_limit: Weight,
-        storage_deposit_limit: DepositLimit<BalanceOf<Self::T>>,
+        storage_deposit_limit: DepositLimit<U256>,
     ) -> ContractResultInstantiate<Self::T> {
-        let storage_deposit_limit = storage_deposit_limit_fn(storage_deposit_limit);
+        let value =
+            convert_evm_to_native::<Self::T>(value, ConversionPrecision::Exact).unwrap();
+        let storage_deposit_limit =
+            storage_deposit_limit_fn::<Self::T>(storage_deposit_limit).unwrap();
         self.execute_with(|| {
             pallet_revive::Pallet::<Self::T>::bare_instantiate(
                 origin,
@@ -183,14 +194,17 @@ where
     fn instantiate_contract(
         &mut self,
         code_hash: H256,
-        value: BalanceOf<Self::T>,
+        value: U256,
         data: Vec<u8>,
         salt: Option<[u8; 32]>,
         origin: OriginFor<Self::T>,
         gas_limit: Weight,
-        storage_deposit_limit: DepositLimit<BalanceOf<Self::T>>,
+        storage_deposit_limit: DepositLimit<U256>,
     ) -> ContractResultInstantiate<Self::T> {
-        let storage_deposit_limit = storage_deposit_limit_fn(storage_deposit_limit);
+        let value =
+            convert_evm_to_native::<Self::T>(value, ConversionPrecision::Exact).unwrap();
+        let storage_deposit_limit =
+            storage_deposit_limit_fn::<Self::T>(storage_deposit_limit).unwrap();
         self.execute_with(|| {
             pallet_revive::Pallet::<Self::T>::bare_instantiate(
                 origin,
@@ -208,27 +222,41 @@ where
         &mut self,
         contract_bytes: Vec<u8>,
         origin: OriginFor<Self::T>,
-        storage_deposit_limit: BalanceOf<Self::T>,
-    ) -> CodeUploadResult<BalanceOf<Self::T>> {
+        storage_deposit_limit: U256,
+    ) -> CodeUploadResult<U256> {
         self.execute_with(|| {
-            pallet_revive::Pallet::<Self::T>::bare_upload_code(
+            let storage_deposit_limit = convert_evm_to_native::<Self::T>(
+                storage_deposit_limit,
+                ConversionPrecision::Exact,
+            )
+            .unwrap();
+            let result = pallet_revive::Pallet::<Self::T>::bare_upload_code(
                 origin,
                 contract_bytes,
                 storage_deposit_limit,
-            )
+            );
+            result.map(|r| {
+                CodeUploadReturnValue {
+                    code_hash: r.code_hash,
+                    deposit: convert_native_to_evm::<Self::T>(r.deposit),
+                }
+            })
         })
     }
 
     fn call_contract(
         &mut self,
         address: Address,
-        value: BalanceOf<Self::T>,
+        value: U256,
         data: Vec<u8>,
         origin: OriginFor<Self::T>,
         gas_limit: Weight,
-        storage_deposit_limit: DepositLimit<BalanceOf<Self::T>>,
+        storage_deposit_limit: DepositLimit<U256>,
     ) -> ContractExecResultFor<Self::T> {
-        let storage_deposit_limit = storage_deposit_limit_fn(storage_deposit_limit);
+        let value =
+            convert_evm_to_native::<Self::T>(value, ConversionPrecision::Exact).unwrap();
+        let storage_deposit_limit =
+            storage_deposit_limit_fn::<Self::T>(storage_deposit_limit).unwrap();
         self.execute_with(|| {
             pallet_revive::Pallet::<Self::T>::bare_call(
                 origin,
@@ -242,14 +270,64 @@ where
     }
 }
 
-/// todo
-fn storage_deposit_limit_fn<Balance>(
-    limit: DepositLimit<Balance>,
-) -> pallet_revive::DepositLimit<Balance> {
-    match limit {
-        DepositLimit::Unchecked => pallet_revive::DepositLimit::Unchecked,
-        DepositLimit::Balance(v) => pallet_revive::DepositLimit::Balance(v),
+/// Convert a native balance to EVM balance.
+pub fn convert_native_to_evm<T>(value: BalanceOf<T>) -> U256
+where
+    T: Config,
+    BalanceOf<T>: Into<U256> + TryFrom<U256> + Bounded,
+{
+    value
+        .into()
+        .saturating_mul(T::NativeToEthRatio::get().into())
+}
+
+/// Convert an EVM balance to a native balance.
+pub fn convert_evm_to_native<T>(
+    value: U256,
+    precision: ConversionPrecision,
+) -> Result<BalanceOf<T>, Error<T>>
+where
+    T: Config,
+    BalanceOf<T>: Into<U256> + TryFrom<U256> + Bounded,
+{
+    if value.is_zero() {
+        return Ok(Zero::zero())
     }
+
+    let (quotient, remainder) = value.div_mod(T::NativeToEthRatio::get().into());
+    match (precision, remainder.is_zero()) {
+        (ConversionPrecision::Exact, false) => Err(Error::<T>::DecimalPrecisionLoss),
+        (_, true) => {
+            quotient
+                .try_into()
+                .map_err(|_| Error::<T>::BalanceConversionFailed)
+        }
+        (_, false) => {
+            quotient
+                .saturating_add(U256::one())
+                .try_into()
+                .map_err(|_| Error::<T>::BalanceConversionFailed)
+        }
+    }
+}
+
+/// todo
+fn storage_deposit_limit_fn<T>(
+    limit: DepositLimit<U256>,
+) -> Result<pallet_revive::DepositLimit<BalanceOf<T>>, Error<T>>
+where
+    T: Config,
+    BalanceOf<T>: Into<U256> + TryFrom<U256> + Bounded,
+{
+    Ok(match limit {
+        DepositLimit::Unchecked => pallet_revive::DepositLimit::Unchecked,
+        DepositLimit::Balance(v) => {
+            pallet_revive::DepositLimit::Balance(convert_evm_to_native(
+                v,
+                ConversionPrecision::Exact,
+            )?)
+        }
+    })
 }
 
 /// todo
@@ -271,7 +349,7 @@ mod tests {
         RuntimeEventOf,
     };
 
-    const STORAGE_DEPOSIT_LIMIT: DepositLimit<u128> = DepositLimit::Unchecked;
+    const STORAGE_DEPOSIT_LIMIT: DepositLimit<U256> = DepositLimit::Unchecked;
 
     fn compile_module(contract_name: &str) -> Vec<u8> {
         // todo compile the contract, instead of reading the binary
@@ -299,7 +377,11 @@ mod tests {
 
         let origin =
             DefaultSandbox::convert_account_to_origin(DefaultSandbox::default_actor());
-        let result = sandbox.upload_contract(contract_binary, origin, 100000000000000);
+        let result = sandbox.upload_contract(
+            contract_binary,
+            origin,
+            U256::from(100000000000000u128),
+        );
 
         assert!(result.is_ok());
         assert_eq!(hash, result.unwrap().code_hash);
@@ -318,12 +400,12 @@ mod tests {
         sandbox.map_account(origin.clone()).expect("cannot map");
         let result = sandbox.deploy_contract(
             contract_binary.clone(),
-            0,
+            U256::from(0),
             vec![],
             None,
             origin.clone(),
             DefaultSandbox::default_gas_limit(),
-            DepositLimit::Balance(100000000000000),
+            DepositLimit::Balance(U256::from(100000000000000u128)),
         );
         assert!(result.result.is_ok());
         assert!(!result.result.unwrap().result.did_revert());
@@ -331,12 +413,12 @@ mod tests {
         // deploying again must fail due to `DuplicateContract`
         let result = sandbox.deploy_contract(
             contract_binary,
-            0,
+            U256::from(0),
             vec![],
             None,
             origin,
             DefaultSandbox::default_gas_limit(),
-            DepositLimit::Balance(100000000000000),
+            DepositLimit::Balance(U256::from(100000000000000u128)),
         );
         assert!(result.result.is_err());
         let dispatch_err = result.result.unwrap_err();
@@ -354,7 +436,7 @@ mod tests {
         sandbox.map_account(origin.clone()).expect("unable to map");
         let result = sandbox.deploy_contract(
             contract_binary,
-            0,
+            U256::from(0),
             vec![],
             None,
             origin.clone(),
@@ -369,7 +451,7 @@ mod tests {
 
         let result = sandbox.call_contract(
             contract_address,
-            0,
+            U256::from(0),
             vec![],
             origin.clone(),
             DefaultSandbox::default_gas_limit(),
